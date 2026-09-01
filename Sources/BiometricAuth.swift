@@ -2,7 +2,7 @@ import Foundation
 import LocalAuthentication
 
 enum BiometricAuth {
-    static func confirm(reason: String = "Change sleep prevention settings.") async throws {
+    static func confirm(reason: String = "Confirm changing whether this Mac sleeps when the lid is closed.") async throws {
         let context = LAContext()
         context.localizedCancelTitle = "Cancel"
 

@@ -15,9 +15,11 @@ echo "Building ${APP_NAME}..."
   -O \
   -parse-as-library \
   -target arm64-apple-macosx13.0 \
+  -framework IOKit \
   -o "$BIN" \
   "$ROOT/Sources/MacPowerSwitcherApp.swift" \
   "$ROOT/Sources/SleepPreventer.swift" \
+  "$ROOT/Sources/PowerStatus.swift" \
   "$ROOT/Sources/BiometricAuth.swift" \
   "$ROOT/Sources/PrivilegedHelper.swift"
 
