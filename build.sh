@@ -23,5 +23,24 @@ echo "Building ${APP_NAME}..."
 
 cp "$ROOT/Info.plist" "$CONTENTS/Info.plist"
 
+DMG_STAGING="$ROOT/dist/dmg-staging"
+DMG_PATH="$ROOT/dist/${APP_NAME}.dmg"
+
+rm -rf "$DMG_STAGING"
+mkdir -p "$DMG_STAGING"
+cp -R "$APP_DIR" "$DMG_STAGING/"
+ln -s /Applications "$DMG_STAGING/Applications"
+
+echo "Creating ${APP_NAME}.dmg..."
+hdiutil create \
+  -volname "Mac Power Switcher" \
+  -srcfolder "$DMG_STAGING" \
+  -ov \
+  -format UDZO \
+  "$DMG_PATH"
+
+rm -rf "$DMG_STAGING"
+
 echo "Built: $APP_DIR"
-echo "Open with: open \"$APP_DIR\""
+echo "DMG:   $DMG_PATH"
+echo "Open with: open \"$DMG_PATH\""
