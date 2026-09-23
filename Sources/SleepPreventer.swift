@@ -4,24 +4,45 @@ import notify
 
 @MainActor
 final class SleepPreventer: ObservableObject {
-    static let lowBatteryPercent = 10
+    let settingsStore = AppSettingsStore()
 
     @Published private(set) var isEnabled = false
     @Published private(set) var isBusy = false
-    @Published private(set) var didAutoDisable = false
+    @Published private(set) var autoDisableReason: AutoDisableReason?
 
     private var watchTimer: Timer?
+    private var autoOffTimer: Timer?
     private var lidNotifyToken: Int32 = 0
+    private var enabledAt: Date?
+    private var previousLidClosed: Bool = false
+
+    var minPowerPercent: Int { settingsStore.settings.minPowerPercent }
+
+    enum AutoDisableReason {
+        case lowBattery
+        case timeout
+        case lidOpened
+    }
 
     init() {
         refresh()
         if isEnabled {
+            enabledAt = settingsStore.loadWakeState().enabledAt ?? Date()
+            persistWakeState()
             startWatching()
         }
     }
 
     func refresh() {
         isEnabled = Self.readSleepDisabled()
+    }
+
+    func settingsDidChange() {
+        objectWillChange.send()
+        guard isEnabled else { return }
+        scheduleAutoOffTimer()
+        autoDisableIfNeeded()
+        autoDisableIfTimedOut()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -35,10 +56,13 @@ final class SleepPreventer: ObservableObject {
                 try await BiometricAuth.confirm()
                 try PrivilegedHelper.setSleepDisabled(enabled)
                 isEnabled = enabled
-                didAutoDisable = false
+                autoDisableReason = nil
                 if enabled {
+                    enabledAt = Date()
+                    persistWakeState()
                     startWatching()
                 } else {
+                    clearWakeState()
                     stopWatching()
                 }
             } catch {
@@ -48,21 +72,53 @@ final class SleepPreventer: ObservableObject {
         }
     }
 
+    var timeoutMenuText: String {
+        guard let minutes = settingsStore.settings.autoDisableMinutes else {
+            return "Wake timeout: infinite"
+        }
+        if minutes == 1 {
+            return "Turns off automatically after 1 minute"
+        }
+        return "Turns off automatically after \(minutes) minutes"
+    }
+
     private func autoDisableIfNeeded() {
         guard isEnabled, !isBusy else { return }
         guard PowerStatus.isLidClosed() else { return }
         guard let battery = PowerStatus.battery() else { return }
-        guard battery.percent <= Self.lowBatteryPercent, !battery.isCharging else { return }
+        guard battery.percent <= minPowerPercent, !battery.isCharging else { return }
+        performAutoDisable(reason: .lowBattery)
+    }
 
+    private func autoDisableIfLidOpened() {
+        guard isEnabled, !isBusy else { return }
+        guard settingsStore.settings.disableOnLidOpen else { return }
+        let lidClosed = PowerStatus.isLidClosed()
+        defer { previousLidClosed = lidClosed }
+        guard previousLidClosed, !lidClosed else { return }
+        performAutoDisable(reason: .lidOpened)
+    }
+
+    private func autoDisableIfTimedOut() {
+        guard isEnabled, !isBusy else { return }
+        guard let minutes = settingsStore.settings.autoDisableMinutes, let enabledAt else { return }
+        let deadline = enabledAt.addingTimeInterval(TimeInterval(minutes * 60))
+        guard Date() >= deadline else { return }
+        performAutoDisable(reason: .timeout)
+    }
+
+    private func performAutoDisable(reason: AutoDisableReason) {
+        guard isEnabled, !isBusy else { return }
         isBusy = true
         Task {
             defer { isBusy = false }
             do {
                 try PrivilegedHelper.setSleepDisabled(false)
                 isEnabled = false
-                didAutoDisable = true
+                autoDisableReason = reason
+                clearWakeState()
                 stopWatching()
-                if !PowerStatus.hasExternalDisplay() {
+                if PowerStatus.isLidClosed(), !PowerStatus.hasExternalDisplay() {
                     PowerStatus.sleepNow()
                 }
             } catch {
@@ -73,11 +129,16 @@ final class SleepPreventer: ObservableObject {
 
     private func startWatching() {
         stopWatching()
+        previousLidClosed = PowerStatus.isLidClosed()
         autoDisableIfNeeded()
+        autoDisableIfTimedOut()
+        scheduleAutoOffTimer()
 
         watchTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.autoDisableIfNeeded()
+                self?.autoDisableIfTimedOut()
+                self?.autoDisableIfLidOpened()
             }
         }
 
@@ -88,6 +149,7 @@ final class SleepPreventer: ObservableObject {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.autoDisableIfNeeded()
+                self?.autoDisableIfLidOpened()
             }
         }
     }
@@ -95,10 +157,38 @@ final class SleepPreventer: ObservableObject {
     private func stopWatching() {
         watchTimer?.invalidate()
         watchTimer = nil
+        autoOffTimer?.invalidate()
+        autoOffTimer = nil
         if lidNotifyToken != 0 {
             notify_cancel(lidNotifyToken)
             lidNotifyToken = 0
         }
+    }
+
+    private func scheduleAutoOffTimer() {
+        autoOffTimer?.invalidate()
+        autoOffTimer = nil
+        guard isEnabled else { return }
+        guard let minutes = settingsStore.settings.autoDisableMinutes, let enabledAt else { return }
+        let remaining = enabledAt.addingTimeInterval(TimeInterval(minutes * 60)).timeIntervalSinceNow
+        if remaining <= 0 {
+            autoDisableIfTimedOut()
+            return
+        }
+        autoOffTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.autoDisableIfTimedOut()
+            }
+        }
+    }
+
+    private func persistWakeState() {
+        settingsStore.saveWakeState(WakeState(enabledAt: enabledAt))
+    }
+
+    private func clearWakeState() {
+        enabledAt = nil
+        settingsStore.saveWakeState(WakeState(enabledAt: nil))
     }
 
     private static func readSleepDisabled() -> Bool {

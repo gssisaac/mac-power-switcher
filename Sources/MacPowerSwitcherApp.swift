@@ -13,8 +13,15 @@ struct MacPowerSwitcherApp: App {
                 .symbolRenderingMode(.hierarchical)
         }
 
+        Window("Settings", id: "settings") {
+            SettingsView(manager: manager)
+        }
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
+        .defaultSize(width: 440, height: 520)
+
         Window("About Mac Power Switcher", id: "about") {
-            AboutView()
+            AboutView(settings: manager.settingsStore.settings)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
@@ -33,11 +40,19 @@ private struct MenuContent: View {
                 : "Currently: sleep is allowed (normal)"
         )
 
-        if manager.didAutoDisable {
-            Text("Auto-disabled: battery was low with the lid closed")
+        if let reason = manager.autoDisableReason {
+            switch reason {
+            case .lowBattery:
+                Text("Auto-disabled: battery was low with the lid closed")
+            case .timeout:
+                Text("Auto-disabled: wake timeout elapsed")
+            case .lidOpened:
+                Text("Auto-disabled: lid was opened")
+            }
         }
 
-        Text("Auto-disables at \(SleepPreventer.lowBatteryPercent)% if the lid is closed and not charging")
+        Text(manager.timeoutMenuText)
+        Text("Auto-disables at \(manager.minPowerPercent)% if the lid is closed and not charging")
 
         Divider()
 
@@ -53,6 +68,12 @@ private struct MenuContent: View {
 
         Divider()
 
+        Button("Settings…") {
+            NSApp.activate(ignoringOtherApps: true)
+            openWindow(id: "settings")
+        }
+        .keyboardShortcut(",", modifiers: .command)
+
         Button("About Mac Power Switcher") {
             NSApp.activate(ignoringOtherApps: true)
             openWindow(id: "about")
@@ -61,6 +82,8 @@ private struct MenuContent: View {
 }
 
 private struct AboutView: View {
+    var settings: AppSettings
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .center, spacing: 12) {
@@ -92,12 +115,26 @@ private struct AboutView: View {
                     "Turns sleep prevention off. The Mac sleeps the usual way again."
                 )
                 bullet(
+                    "Wake timeout",
+                    wakeTimeoutDetail
+                )
+                bullet(
                     "Power source",
                     "Only applies on AC power. On battery, the Mac still sleeps normally."
                 )
                 bullet(
                     "Low battery",
-                    "If the lid is closed, the battery is at \(SleepPreventer.lowBatteryPercent)% or below, and it is not charging, sleep prevention turns off by itself so the Mac can sleep. That path uses the approval you already gave when you turned prevention on — no Touch ID with the lid closed."
+                    "If the lid is closed, the battery is at \(settings.minPowerPercent)% or below, and it is not charging, sleep prevention turns off by itself so the Mac can sleep. That path uses the approval you already gave when you turned prevention on — no Touch ID with the lid closed."
+                )
+                bullet(
+                    "Lid opens",
+                    settings.disableOnLidOpen
+                        ? "When you open the lid again, sleep prevention turns off by itself so the Mac returns to normal."
+                        : "Sleep prevention stays on after the lid opens. Turn it off manually with Allow Sleep."
+                )
+                bullet(
+                    "Settings",
+                    "Open Settings from the menu to change the wake timeout and minimum battery. Values are stored in ~/.mac-power-switcher/settings.json. If that file is missing, the app uses the defaults (30-minute timeout, 10% battery)."
                 )
                 bullet(
                     "Authentication",
@@ -111,6 +148,16 @@ private struct AboutView: View {
         }
         .padding(24)
         .frame(width: 440)
+    }
+
+    private var wakeTimeoutDetail: String {
+        guard let minutes = settings.autoDisableMinutes else {
+            return "Sleep prevention stays on until you turn it off, or until the battery reaches the minimum level."
+        }
+        if minutes == 1 {
+            return "Sleep prevention turns off by itself after 1 minute."
+        }
+        return "Sleep prevention turns off by itself after \(minutes) minutes."
     }
 
     private func bullet(_ title: String, _ detail: String) -> some View {

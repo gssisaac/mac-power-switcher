@@ -1,32 +1,18 @@
 #!/usr/bin/env bash
+# Local unsigned build + DMG (no code signing).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib/build-app.sh
+source "$ROOT/scripts/lib/build-app.sh"
+
 APP_NAME="MacPowerSwitcher"
 APP_DIR="$ROOT/dist/${APP_NAME}.app"
-CONTENTS="$APP_DIR/Contents"
-MACOS_DIR="$CONTENTS/MacOS"
-BIN="$MACOS_DIR/$APP_NAME"
-
-mkdir -p "$MACOS_DIR"
-
-echo "Building ${APP_NAME}..."
-/usr/bin/swiftc \
-  -O \
-  -parse-as-library \
-  -target arm64-apple-macosx13.0 \
-  -framework IOKit \
-  -o "$BIN" \
-  "$ROOT/Sources/MacPowerSwitcherApp.swift" \
-  "$ROOT/Sources/SleepPreventer.swift" \
-  "$ROOT/Sources/PowerStatus.swift" \
-  "$ROOT/Sources/BiometricAuth.swift" \
-  "$ROOT/Sources/PrivilegedHelper.swift"
-
-cp "$ROOT/Info.plist" "$CONTENTS/Info.plist"
-
 DMG_STAGING="$ROOT/dist/dmg-staging"
 DMG_PATH="$ROOT/dist/${APP_NAME}.dmg"
+
+mkdir -p "$ROOT/dist"
+build_mac_power_switcher_app "$ROOT" "$APP_DIR"
 
 rm -rf "$DMG_STAGING"
 mkdir -p "$DMG_STAGING"
