@@ -7,13 +7,25 @@ struct AppSettings: Equatable {
     var minPowerPercent: Int
     /// When true, sleep prevention turns off automatically when the lid is opened again.
     var disableOnLidOpen: Bool
+    /// When true, closing the lid starts the wake timeout over from its full duration.
+    var extendOnLidClose: Bool
 
-    static let `default` = AppSettings(autoDisableMinutes: 30, minPowerPercent: 10, disableOnLidOpen: true)
+    static let `default` = AppSettings(
+        autoDisableMinutes: 30,
+        minPowerPercent: 10,
+        disableOnLidOpen: false,
+        extendOnLidClose: true
+    )
     static let timeoutPresets = [10, 15, 30, 60]
     static let minPowerRange = 1...100
     static let customMinutesRange = 1...10_080
 
-    init(autoDisableMinutes: Int? = 30, minPowerPercent: Int = 10, disableOnLidOpen: Bool = true) {
+    init(
+        autoDisableMinutes: Int? = 30,
+        minPowerPercent: Int = 10,
+        disableOnLidOpen: Bool = false,
+        extendOnLidClose: Bool = true
+    ) {
         if let minutes = autoDisableMinutes, minutes > 0 {
             self.autoDisableMinutes = min(
                 max(minutes, Self.customMinutesRange.lowerBound),
@@ -27,6 +39,7 @@ struct AppSettings: Equatable {
             Self.minPowerRange.upperBound
         )
         self.disableOnLidOpen = disableOnLidOpen
+        self.extendOnLidClose = extendOnLidClose
     }
 }
 
@@ -35,18 +48,30 @@ extension AppSettings: Codable {
         case autoDisableMinutes
         case minPowerPercent
         case disableOnLidOpen
+        case extendOnLidClose
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let minutes = try container.decodeIfPresent(Int.self, forKey: .autoDisableMinutes)
         let percent = try container.decodeIfPresent(Int.self, forKey: .minPowerPercent) ?? AppSettings.default.minPowerPercent
-        let disableOnLidOpen = try container.decodeIfPresent(Bool.self, forKey: .disableOnLidOpen) ?? true
+        let disableOnLidOpen = try container.decodeIfPresent(Bool.self, forKey: .disableOnLidOpen) ?? false
+        let extendOnLidClose = try container.decodeIfPresent(Bool.self, forKey: .extendOnLidClose) ?? true
         // Missing key → default 30 minutes. Explicit 0 (or negative) → infinite.
         if container.contains(.autoDisableMinutes) {
-            self.init(autoDisableMinutes: minutes, minPowerPercent: percent, disableOnLidOpen: disableOnLidOpen)
+            self.init(
+                autoDisableMinutes: minutes,
+                minPowerPercent: percent,
+                disableOnLidOpen: disableOnLidOpen,
+                extendOnLidClose: extendOnLidClose
+            )
         } else {
-            self.init(autoDisableMinutes: AppSettings.default.autoDisableMinutes, minPowerPercent: percent, disableOnLidOpen: disableOnLidOpen)
+            self.init(
+                autoDisableMinutes: AppSettings.default.autoDisableMinutes,
+                minPowerPercent: percent,
+                disableOnLidOpen: disableOnLidOpen,
+                extendOnLidClose: extendOnLidClose
+            )
         }
     }
 
@@ -55,6 +80,7 @@ extension AppSettings: Codable {
         try container.encode(autoDisableMinutes ?? 0, forKey: .autoDisableMinutes)
         try container.encode(minPowerPercent, forKey: .minPowerPercent)
         try container.encode(disableOnLidOpen, forKey: .disableOnLidOpen)
+        try container.encode(extendOnLidClose, forKey: .extendOnLidClose)
     }
 }
 

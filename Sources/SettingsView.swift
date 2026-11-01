@@ -4,11 +4,13 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var manager: SleepPreventer
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.openWindow) private var openWindow
 
     @State private var timeoutChoice: WakeTimeoutChoice = .minutes(30)
     @State private var customMinutes: Int = 30
     @State private var minPowerPercent: Int = 10
-    @State private var disableOnLidOpen: Bool = true
+    @State private var disableOnLidOpen: Bool = false
+    @State private var extendOnLidClose: Bool = true
     @State private var saveError: String?
 
     var body: some View {
@@ -19,7 +21,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Wake timeout")
                     .font(.headline)
-                Text("Automatically turn off sleep prevention after this time. Infinite keeps it on until you turn it off, or until the battery is low.")
+                Text("Automatically turn off sleep prevention after this time. While the lid is open, the time left appears beside the menu bar icon. Infinite keeps it on until you turn it off, or until the battery is low.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -65,14 +67,25 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Lid opens")
+                Text("Lid")
                     .font(.headline)
-                Text("When you open the lid again, sleep prevention can turn off by itself so the Mac returns to normal.")
+                Text("Sleep prevention stays on until you turn it off. You can also turn it off when the lid opens, and restart the wake timeout when the lid closes.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Toggle("Auto-disable when lid opens", isOn: $disableOnLidOpen)
+                Toggle("Turn off when the lid opens", isOn: $disableOnLidOpen)
                     .toggleStyle(.switch)
+                Text("Off by default. Turn this on if opening the lid should restore normal sleep immediately.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Toggle("Restart the timer when the lid closes", isOn: $extendOnLidClose)
+                    .toggleStyle(.switch)
+                Text("On by default. Closing the lid starts the wake timeout over. A 15-minute timer with 2 minutes left becomes 15 minutes again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let saveError {
@@ -86,6 +99,10 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
 
             HStack {
+                Button("About") {
+                    NSApp.activate(ignoringOtherApps: true)
+                    openWindow(id: "about")
+                }
                 Spacer()
                 Button("Cancel") {
                     closeWindow()
@@ -115,6 +132,7 @@ struct SettingsView: View {
         customMinutes = settings.autoDisableMinutes ?? 30
         minPowerPercent = settings.minPowerPercent
         disableOnLidOpen = settings.disableOnLidOpen
+        extendOnLidClose = settings.extendOnLidClose
         saveError = nil
     }
 
@@ -133,7 +151,8 @@ struct SettingsView: View {
         manager.settingsStore.settings = AppSettings(
             autoDisableMinutes: minutes,
             minPowerPercent: minPowerPercent,
-            disableOnLidOpen: disableOnLidOpen
+            disableOnLidOpen: disableOnLidOpen,
+            extendOnLidClose: extendOnLidClose
         )
         do {
             try manager.settingsStore.save()

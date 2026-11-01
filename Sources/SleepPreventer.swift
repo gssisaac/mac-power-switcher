@@ -9,12 +9,16 @@ final class SleepPreventer: ObservableObject {
     @Published private(set) var isEnabled = false
     @Published private(set) var isBusy = false
     @Published private(set) var autoDisableReason: AutoDisableReason?
+    /// Minutes or `h:mm` left until the wake timeout, shown beside the tray icon while the lid is open.
+    @Published private(set) var trayTimeText: String?
 
     private var watchTimer: Timer?
     private var autoOffTimer: Timer?
+    private var displayTimer: Timer?
     private var lidNotifyToken: Int32 = 0
     private var enabledAt: Date?
     private var previousLidClosed: Bool = false
+    private var hasConfirmedAuth = false
 
     var minPowerPercent: Int { settingsStore.settings.minPowerPercent }
 
@@ -39,10 +43,14 @@ final class SleepPreventer: ObservableObject {
 
     func settingsDidChange() {
         objectWillChange.send()
-        guard isEnabled else { return }
+        guard isEnabled else {
+            updateTrayTime()
+            return
+        }
         scheduleAutoOffTimer()
-        autoDisableIfNeeded()
+        handleLidChange()
         autoDisableIfTimedOut()
+        updateTrayTime()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -53,7 +61,10 @@ final class SleepPreventer: ObservableObject {
             defer { isBusy = false }
             do {
                 try PrivilegedHelper.ensureInstalled()
-                try await BiometricAuth.confirm()
+                if !hasConfirmedAuth {
+                    try await BiometricAuth.confirm()
+                    hasConfirmedAuth = true
+                }
                 try PrivilegedHelper.setSleepDisabled(enabled)
                 isEnabled = enabled
                 autoDisableReason = nil
@@ -72,14 +83,18 @@ final class SleepPreventer: ObservableObject {
         }
     }
 
-    var timeoutMenuText: String {
-        guard let minutes = settingsStore.settings.autoDisableMinutes else {
-            return "Wake timeout: infinite"
+    /// `h:mm` when an hour or more remains, otherwise just the minute count, rounded up.
+    static func formatRemaining(_ remaining: TimeInterval) -> String? {
+        guard remaining > 0 else { return nil }
+        let seconds = Int(remaining.rounded(.up))
+        guard seconds > 0 else { return nil }
+        let minutesRoundedUp = (seconds + 59) / 60
+        let hours = minutesRoundedUp / 60
+        let minutes = minutesRoundedUp % 60
+        if hours > 0 {
+            return String(format: "%d:%02d", hours, minutes)
         }
-        if minutes == 1 {
-            return "Turns off automatically after 1 minute"
-        }
-        return "Turns off automatically after \(minutes) minutes"
+        return String(minutesRoundedUp)
     }
 
     private func autoDisableIfNeeded() {
@@ -90,13 +105,31 @@ final class SleepPreventer: ObservableObject {
         performAutoDisable(reason: .lowBattery)
     }
 
-    private func autoDisableIfLidOpened() {
-        guard isEnabled, !isBusy else { return }
-        guard settingsStore.settings.disableOnLidOpen else { return }
+    private func handleLidChange() {
         let lidClosed = PowerStatus.isLidClosed()
-        defer { previousLidClosed = lidClosed }
-        guard previousLidClosed, !lidClosed else { return }
-        performAutoDisable(reason: .lidOpened)
+        let wasClosed = previousLidClosed
+        previousLidClosed = lidClosed
+
+        if wasClosed && !lidClosed && settingsStore.settings.disableOnLidOpen {
+            performAutoDisable(reason: .lidOpened)
+            return
+        }
+
+        if !wasClosed && lidClosed {
+            restartWakeTimerIfExtending()
+        }
+
+        autoDisableIfNeeded()
+        updateTrayTime()
+    }
+
+    private func restartWakeTimerIfExtending() {
+        guard isEnabled, !isBusy else { return }
+        guard settingsStore.settings.extendOnLidClose else { return }
+        guard settingsStore.settings.autoDisableMinutes != nil else { return }
+        enabledAt = Date()
+        persistWakeState()
+        scheduleAutoOffTimer()
     }
 
     private func autoDisableIfTimedOut() {
@@ -133,14 +166,22 @@ final class SleepPreventer: ObservableObject {
         autoDisableIfNeeded()
         autoDisableIfTimedOut()
         scheduleAutoOffTimer()
+        updateTrayTime()
 
         watchTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.autoDisableIfNeeded()
+                self?.handleLidChange()
                 self?.autoDisableIfTimedOut()
-                self?.autoDisableIfLidOpened()
             }
         }
+
+        let display = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.updateTrayTime()
+            }
+        }
+        RunLoop.main.add(display, forMode: .common)
+        displayTimer = display
 
         notify_register_dispatch(
             "com.apple.iokit.powermanagement.clamshellstate",
@@ -148,8 +189,7 @@ final class SleepPreventer: ObservableObject {
             DispatchQueue.main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.autoDisableIfNeeded()
-                self?.autoDisableIfLidOpened()
+                self?.handleLidChange()
             }
         }
     }
@@ -159,10 +199,27 @@ final class SleepPreventer: ObservableObject {
         watchTimer = nil
         autoOffTimer?.invalidate()
         autoOffTimer = nil
+        displayTimer?.invalidate()
+        displayTimer = nil
+        trayTimeText = nil
         if lidNotifyToken != 0 {
             notify_cancel(lidNotifyToken)
             lidNotifyToken = 0
         }
+    }
+
+    private func updateTrayTime() {
+        let next = currentTrayTimeText()
+        if trayTimeText != next {
+            trayTimeText = next
+        }
+    }
+
+    private func currentTrayTimeText() -> String? {
+        guard isEnabled, !PowerStatus.isLidClosed() else { return nil }
+        guard let minutes = settingsStore.settings.autoDisableMinutes, let enabledAt else { return nil }
+        let remaining = enabledAt.addingTimeInterval(TimeInterval(minutes * 60)).timeIntervalSinceNow
+        return Self.formatRemaining(remaining)
     }
 
     private func scheduleAutoOffTimer() {

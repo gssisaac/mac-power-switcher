@@ -9,8 +9,15 @@ struct MacPowerSwitcherApp: App {
         MenuBarExtra {
             MenuContent(manager: manager)
         } label: {
-            Image(systemName: manager.isEnabled ? "bolt.fill" : "bolt.slash")
-                .symbolRenderingMode(.hierarchical)
+            HStack(spacing: 4) {
+                Image(systemName: manager.isEnabled ? "bolt.fill" : "bolt.slash")
+                    .symbolRenderingMode(.hierarchical)
+                if let trayTimeText = manager.trayTimeText {
+                    Text(trayTimeText)
+                        .font(.system(size: 13).monospacedDigit())
+                        .fixedSize()
+                }
+            }
         }
 
         Window("Settings", id: "settings") {
@@ -18,14 +25,14 @@ struct MacPowerSwitcherApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
-        .defaultSize(width: 440, height: 520)
+        .defaultSize(width: 440, height: 680)
 
         Window("About Mac Power Switcher", id: "about") {
             AboutView(settings: manager.settingsStore.settings)
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
-        .defaultSize(width: 440, height: 460)
+        .defaultSize(width: 440, height: 620)
     }
 }
 
@@ -34,37 +41,10 @@ private struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Text(
-            manager.isEnabled
-                ? "Currently: sleep is prevented (lid close stays awake)"
-                : "Currently: sleep is allowed (normal)"
-        )
-
-        if let reason = manager.autoDisableReason {
-            switch reason {
-            case .lowBattery:
-                Text("Auto-disabled: battery was low with the lid closed")
-            case .timeout:
-                Text("Auto-disabled: wake timeout elapsed")
-            case .lidOpened:
-                Text("Auto-disabled: lid was opened")
-            }
+        Button(manager.isEnabled ? "Turn Off" : "Turn On") {
+            manager.setEnabled(!manager.isEnabled)
         }
-
-        Text(manager.timeoutMenuText)
-        Text("Auto-disables at \(manager.minPowerPercent)% if the lid is closed and not charging")
-
-        Divider()
-
-        Button("Prevent Sleep When Lid Closed") {
-            manager.setEnabled(true)
-        }
-        .disabled(manager.isEnabled || manager.isBusy)
-
-        Button("Allow Sleep (Restore Normal)") {
-            manager.setEnabled(false)
-        }
-        .disabled(!manager.isEnabled || manager.isBusy)
+        .disabled(manager.isBusy)
 
         Divider()
 
@@ -73,11 +53,6 @@ private struct MenuContent: View {
             openWindow(id: "settings")
         }
         .keyboardShortcut(",", modifiers: .command)
-
-        Button("About Mac Power Switcher") {
-            NSApp.activate(ignoringOtherApps: true)
-            openWindow(id: "about")
-        }
     }
 }
 
@@ -107,16 +82,16 @@ private struct AboutView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 bullet(
-                    "Prevent Sleep When Lid Closed",
-                    "Turns sleep prevention on. Closing the lid will not put the Mac to sleep."
-                )
-                bullet(
-                    "Allow Sleep (Restore Normal)",
-                    "Turns sleep prevention off. The Mac sleeps the usual way again."
+                    "Turn On / Turn Off",
+                    "Turns sleep prevention on or off. It stays on until you turn it off, unless a wake timeout or the lid option below says otherwise."
                 )
                 bullet(
                     "Wake timeout",
                     wakeTimeoutDetail
+                )
+                bullet(
+                    "Time in the menu bar",
+                    "While the lid is open and a wake timeout is set, the time left appears to the right of the lightning bolt. Under an hour it shows minutes only, such as 14. An hour or more shows h:mm, such as 1:05."
                 )
                 bullet(
                     "Power source",
@@ -124,21 +99,27 @@ private struct AboutView: View {
                 )
                 bullet(
                     "Low battery",
-                    "If the lid is closed, the battery is at \(settings.minPowerPercent)% or below, and it is not charging, sleep prevention turns off by itself so the Mac can sleep. That path uses the approval you already gave when you turned prevention on — no Touch ID with the lid closed."
+                    "If the lid is closed, the battery is at \(settings.minPowerPercent)% or below, and it is not charging, sleep prevention turns off by itself so the Mac can sleep. That path does not ask for Touch ID."
                 )
                 bullet(
                     "Lid opens",
                     settings.disableOnLidOpen
                         ? "When you open the lid again, sleep prevention turns off by itself so the Mac returns to normal."
-                        : "Sleep prevention stays on after the lid opens. Turn it off manually with Allow Sleep."
+                        : "Sleep prevention stays on after you open the lid. Turn it off yourself with Turn Off, or wait for the wake timeout."
+                )
+                bullet(
+                    "Lid closes",
+                    settings.extendOnLidClose
+                        ? "Closing the lid starts the wake timeout over. A 15-minute timer with 2 minutes left becomes 15 minutes again."
+                        : "Closing the lid does not change the wake timeout. The countdown keeps running."
                 )
                 bullet(
                     "Settings",
-                    "Open Settings from the menu to change the wake timeout and minimum battery. Values are stored in ~/.mac-power-switcher/settings.json. If that file is missing, the app uses the defaults (30-minute timeout, 10% battery)."
+                    "Open Settings from the menu to change the wake timeout, minimum battery, and lid behavior. Values are stored in ~/.mac-power-switcher/settings.json. If that file is missing, the app uses the defaults (30-minute timeout, 10% battery, stay on when the lid opens, restart the timer when the lid closes)."
                 )
                 bullet(
                     "Authentication",
-                    "Manually changing the setting still requires Touch ID or your Mac password. The first time, macOS may also ask for an administrator password to install a helper."
+                    "The first time you turn this on or off after the app launches, macOS asks for Touch ID or your password. Later changes in that session do not ask again. The first time, macOS may also ask for an administrator password to install a helper."
                 )
             }
 
