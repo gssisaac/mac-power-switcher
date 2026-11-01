@@ -41,7 +41,7 @@ private struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button(manager.isEnabled ? "Turn Off" : "Turn On") {
+        Button(manager.isEnabled ? "Turn off wake up" : "Turn on wake up") {
             manager.setEnabled(!manager.isEnabled)
         }
         .disabled(manager.isBusy)
@@ -71,7 +71,7 @@ private struct AboutView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Mac Power Switcher")
                         .font(.title2.bold())
-                    Text("Version 1.0.0")
+                    Text(versionText)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -82,7 +82,7 @@ private struct AboutView: View {
 
             VStack(alignment: .leading, spacing: 8) {
                 bullet(
-                    "Turn On / Turn Off",
+                    "Turn on wake up / Turn off wake up",
                     "Turns sleep prevention on or off. It stays on until you turn it off, unless a wake timeout or the lid option below says otherwise."
                 )
                 bullet(
@@ -91,7 +91,7 @@ private struct AboutView: View {
                 )
                 bullet(
                     "Time in the menu bar",
-                    "While the lid is open and a wake timeout is set, the time left appears to the right of the lightning bolt. Under an hour it shows minutes only, such as 14. An hour or more shows h:mm, such as 1:05."
+                    "While the lid is open and a wake timeout is set, the time left appears to the right of the lightning bolt as hh:mm, such as 00:14 or 01:05."
                 )
                 bullet(
                     "Power source",
@@ -105,7 +105,7 @@ private struct AboutView: View {
                     "Lid opens",
                     settings.disableOnLidOpen
                         ? "When you open the lid again, sleep prevention turns off by itself so the Mac returns to normal."
-                        : "Sleep prevention stays on after you open the lid. Turn it off yourself with Turn Off, or wait for the wake timeout."
+                        : "Sleep prevention stays on after you open the lid. Turn it off yourself with Turn off wake up, or wait for the wake timeout."
                 )
                 bullet(
                     "Lid closes",
@@ -129,6 +129,11 @@ private struct AboutView: View {
         }
         .padding(24)
         .frame(width: 440)
+    }
+
+    private var versionText: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        return "Version \(version ?? "1.1.0")"
     }
 
     private var wakeTimeoutDetail: String {

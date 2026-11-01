@@ -9,7 +9,7 @@ final class SleepPreventer: ObservableObject {
     @Published private(set) var isEnabled = false
     @Published private(set) var isBusy = false
     @Published private(set) var autoDisableReason: AutoDisableReason?
-    /// Minutes or `h:mm` left until the wake timeout, shown beside the tray icon while the lid is open.
+    /// `hh:mm` left until the wake timeout, shown beside the tray icon while the lid is open.
     @Published private(set) var trayTimeText: String?
 
     private var watchTimer: Timer?
@@ -83,7 +83,7 @@ final class SleepPreventer: ObservableObject {
         }
     }
 
-    /// `h:mm` when an hour or more remains, otherwise just the minute count, rounded up.
+    /// Remaining time as `hh:mm`, rounded up to the next minute.
     static func formatRemaining(_ remaining: TimeInterval) -> String? {
         guard remaining > 0 else { return nil }
         let seconds = Int(remaining.rounded(.up))
@@ -91,10 +91,7 @@ final class SleepPreventer: ObservableObject {
         let minutesRoundedUp = (seconds + 59) / 60
         let hours = minutesRoundedUp / 60
         let minutes = minutesRoundedUp % 60
-        if hours > 0 {
-            return String(format: "%d:%02d", hours, minutes)
-        }
-        return String(minutesRoundedUp)
+        return String(format: "%02d:%02d", hours, minutes)
     }
 
     private func autoDisableIfNeeded() {
