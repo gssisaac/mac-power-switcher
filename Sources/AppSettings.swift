@@ -1,20 +1,14 @@
 import Foundation
 
 struct AppSettings: Equatable {
-    /// Minutes until wake mode turns off. `nil` means infinite.
+    /// Minutes after the lid closes before the Mac sleeps. `nil` means it stays awake.
     var autoDisableMinutes: Int?
-    /// Turn off wake mode at or below this battery percent when the lid is closed and not charging.
+    /// Turn wake mode off at or below this battery percent when the lid is closed and not charging.
     var minPowerPercent: Int
-    /// When true, sleep prevention turns off automatically when the lid is opened again.
-    var disableOnLidOpen: Bool
-    /// When true, closing the lid starts the wake timeout over from its full duration.
-    var extendOnLidClose: Bool
 
     static let `default` = AppSettings(
         autoDisableMinutes: 30,
-        minPowerPercent: 10,
-        disableOnLidOpen: false,
-        extendOnLidClose: true
+        minPowerPercent: 10
     )
     static let timeoutPresets = [10, 15, 30, 60]
     static let minPowerRange = 1...100
@@ -22,9 +16,7 @@ struct AppSettings: Equatable {
 
     init(
         autoDisableMinutes: Int? = 30,
-        minPowerPercent: Int = 10,
-        disableOnLidOpen: Bool = false,
-        extendOnLidClose: Bool = true
+        minPowerPercent: Int = 10
     ) {
         if let minutes = autoDisableMinutes, minutes > 0 {
             self.autoDisableMinutes = min(
@@ -38,8 +30,6 @@ struct AppSettings: Equatable {
             max(minPowerPercent, Self.minPowerRange.lowerBound),
             Self.minPowerRange.upperBound
         )
-        self.disableOnLidOpen = disableOnLidOpen
-        self.extendOnLidClose = extendOnLidClose
     }
 }
 
@@ -47,31 +37,18 @@ extension AppSettings: Codable {
     enum CodingKeys: String, CodingKey {
         case autoDisableMinutes
         case minPowerPercent
-        case disableOnLidOpen
-        case extendOnLidClose
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let minutes = try container.decodeIfPresent(Int.self, forKey: .autoDisableMinutes)
         let percent = try container.decodeIfPresent(Int.self, forKey: .minPowerPercent) ?? AppSettings.default.minPowerPercent
-        let disableOnLidOpen = try container.decodeIfPresent(Bool.self, forKey: .disableOnLidOpen) ?? false
-        let extendOnLidClose = try container.decodeIfPresent(Bool.self, forKey: .extendOnLidClose) ?? true
-        // Missing key → default 30 minutes. Explicit 0 (or negative) → infinite.
+        // Missing key → default 30 minutes. Explicit 0 (or negative) → never sleep on lid close.
+        // Older files may also contain lid toggles; those keys are ignored.
         if container.contains(.autoDisableMinutes) {
-            self.init(
-                autoDisableMinutes: minutes,
-                minPowerPercent: percent,
-                disableOnLidOpen: disableOnLidOpen,
-                extendOnLidClose: extendOnLidClose
-            )
+            self.init(autoDisableMinutes: minutes, minPowerPercent: percent)
         } else {
-            self.init(
-                autoDisableMinutes: AppSettings.default.autoDisableMinutes,
-                minPowerPercent: percent,
-                disableOnLidOpen: disableOnLidOpen,
-                extendOnLidClose: extendOnLidClose
-            )
+            self.init(autoDisableMinutes: AppSettings.default.autoDisableMinutes, minPowerPercent: percent)
         }
     }
 
@@ -79,8 +56,6 @@ extension AppSettings: Codable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(autoDisableMinutes ?? 0, forKey: .autoDisableMinutes)
         try container.encode(minPowerPercent, forKey: .minPowerPercent)
-        try container.encode(disableOnLidOpen, forKey: .disableOnLidOpen)
-        try container.encode(extendOnLidClose, forKey: .extendOnLidClose)
     }
 }
 
@@ -99,7 +74,10 @@ enum WakeTimeoutChoice: Hashable {
 }
 
 struct WakeState: Codable {
-    var enabledAt: Date?
+    /// User turned wake mode on. Survives a timed sleep so opening the lid keeps it on.
+    var modeEnabled: Bool? = nil
+    /// When the current closed-lid interval started. Nil while the lid is open.
+    var lidClosedAt: Date? = nil
 }
 
 @MainActor
@@ -149,7 +127,7 @@ final class AppSettingsStore: ObservableObject {
             let data = try encoder.encode(state)
             try data.write(to: stateURL, options: .atomic)
         } catch {
-            // State is a convenience for timeout across relaunches; ignore disk errors.
+            // State is a convenience for the lid timer across relaunches; ignore disk errors.
         }
     }
 

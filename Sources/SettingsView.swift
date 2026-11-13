@@ -9,8 +9,6 @@ struct SettingsView: View {
     @State private var timeoutChoice: WakeTimeoutChoice = .minutes(30)
     @State private var customMinutes: Int = 30
     @State private var minPowerPercent: Int = 10
-    @State private var disableOnLidOpen: Bool = false
-    @State private var extendOnLidClose: Bool = true
     @State private var saveError: String?
 
     var body: some View {
@@ -19,19 +17,19 @@ struct SettingsView: View {
                 .font(.title2.bold())
 
             VStack(alignment: .leading, spacing: 8) {
-                Text("Wake timeout")
+                Text("Sleep after closing the lid")
                     .font(.headline)
-                Text("Automatically turn off sleep prevention after this time. While the lid is open, the time left appears beside the menu bar icon. Infinite keeps it on until you turn it off, or until the battery is low.")
+                Text("While the lid is open, the Mac stays awake. This time does not count down, and it does not appear in the menu bar. Closing the lid starts it. When the time is up, the Mac sleeps. Opening the lid cancels it. Closing the lid again starts the full time over. Never keeps the Mac awake with the lid closed until you turn wake mode off.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Picker("Wake timeout", selection: $timeoutChoice) {
+                Picker("Sleep after closing the lid", selection: $timeoutChoice) {
                     Text("10 minutes").tag(WakeTimeoutChoice.minutes(10))
                     Text("15 minutes").tag(WakeTimeoutChoice.minutes(15))
                     Text("30 minutes").tag(WakeTimeoutChoice.minutes(30))
                     Text("60 minutes").tag(WakeTimeoutChoice.minutes(60))
                     Text("Custom").tag(WakeTimeoutChoice.custom)
-                    Text("Infinite").tag(WakeTimeoutChoice.infinite)
+                    Text("Never").tag(WakeTimeoutChoice.infinite)
                 }
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
@@ -51,7 +49,7 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Minimum battery")
                     .font(.headline)
-                Text("If the lid is closed, the battery is at or below this level, and it is not charging, sleep prevention turns off so the Mac can sleep.")
+                Text("If the lid is closed, the battery is at or below this level, and it is not charging, wake mode turns off so the Mac can sleep.")
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
@@ -64,28 +62,6 @@ struct SettingsView: View {
                     Stepper("Percent", value: $minPowerPercent, in: AppSettings.minPowerRange)
                         .labelsHidden()
                 }
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Lid")
-                    .font(.headline)
-                Text("Sleep prevention stays on until you turn it off. You can also turn it off when the lid opens, and restart the wake timeout when the lid closes.")
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Toggle("Turn off when the lid opens", isOn: $disableOnLidOpen)
-                    .toggleStyle(.switch)
-                Text("Off by default. Turn this on if opening the lid should restore normal sleep immediately.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Toggle("Restart the timer when the lid closes", isOn: $extendOnLidClose)
-                    .toggleStyle(.switch)
-                Text("On by default. Closing the lid starts the wake timeout over. A 15-minute timer with 2 minutes left becomes 15 minutes again.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
 
             if let saveError {
@@ -131,8 +107,6 @@ struct SettingsView: View {
         timeoutChoice = WakeTimeoutChoice.from(storedMinutes: settings.autoDisableMinutes)
         customMinutes = settings.autoDisableMinutes ?? 30
         minPowerPercent = settings.minPowerPercent
-        disableOnLidOpen = settings.disableOnLidOpen
-        extendOnLidClose = settings.extendOnLidClose
         saveError = nil
     }
 
@@ -150,9 +124,7 @@ struct SettingsView: View {
 
         manager.settingsStore.settings = AppSettings(
             autoDisableMinutes: minutes,
-            minPowerPercent: minPowerPercent,
-            disableOnLidOpen: disableOnLidOpen,
-            extendOnLidClose: extendOnLidClose
+            minPowerPercent: minPowerPercent
         )
         do {
             try manager.settingsStore.save()

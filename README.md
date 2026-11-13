@@ -35,8 +35,8 @@
 
 - **⚡ True Lid-Close Operation:** Run long downloads, code compilation, server scripts, or render jobs with your MacBook lid closed—without needing an external monitor plugged in.
 - **🛡️ Low-Battery Safety Guard:** If your Mac gets unplugged and the battery drops below your threshold (default: 10%), sleep prevention automatically turns off so your battery never drains to zero.
-- **⏱️ Auto-Disable Wake Timer:** Set a timeout (10m, 15m, 30m, 60m, custom, or infinite) so wake mode automatically turns off when your task finishes.
-- **💻 Stays on when the lid opens:** Wake mode keeps running after you open the lid, unless you turn on the option to stop it. Closing the lid starts the wake timeout over.
+- **⏱️ Sleeps after the lid closes:** Pick 10m, 15m, 30m, 60m, a custom length, or Never. The time starts when the lid closes, not while you are using the Mac. When it ends, the Mac sleeps.
+- **💻 Opening the lid resets it:** Wake mode stays on. Opening the lid cancels the sleep time and keeps the Mac awake. Closing the lid starts the full time again. The menu bar does not show a countdown.
 - **🔒 Touch ID / Password Protection:** The first on or off after launch asks for Touch ID or your Mac password. Later changes in that session do not ask again.
 - **🪶 Ultra-Lightweight & Native:** 100% native Swift & SwiftUI. No Electron, minimal CPU and RAM usage, lives entirely in your menu bar.
 - **✨ Apple Notarized:** Signed with a Developer ID certificate and notarized by Apple for seamless Gatekeeper installation.
@@ -58,15 +58,15 @@
 
 Click the menu bar icon (⚡) to manage sleep prevention:
 
-- **Turn on wake up:** Keeps your Mac awake when the lid is closed while connected to power (AC charger).
+- **Turn on wake up:** Keeps the Mac awake while the lid is open, on AC power. After the lid closes, the Mac stays awake until the time you set runs out, then sleeps.
 - **Turn off wake up:** Reverts back to standard macOS sleep behavior.
-- **Settings (`⌘,`):** Configure the wake timeout, minimum battery, and lid behavior.
+- **Settings (`⌘,`):** Choose how long the Mac stays awake after the lid closes, and the minimum battery.
 
 ### Status Indicators
 
 | Menu Bar Icon | Status |
 | :--- | :--- |
-| `bolt.fill` (⚡) `hh:mm` | **Wake mode on** — Your Mac stays awake with the lid closed on AC power. While the lid is open, the time left until the wake timeout appears beside the icon, such as `00:14`. |
+| `bolt.fill` (⚡) | **Wake mode on** — The Mac stays awake while the lid is open. No countdown is shown. Closing the lid starts the sleep time. |
 | `bolt.slash` | **Normal sleep** — Standard macOS power saving behavior. |
 
 ---
@@ -75,10 +75,8 @@ Click the menu bar icon (⚡) to manage sleep prevention:
 
 Open **Settings** from the menu bar to customize:
 
-1. **Wake Timeout:** Automatically turn wake mode off after a fixed duration (`10m`, `15m`, `30m`, `60m`, custom minutes, or `Infinite`). The time left shows beside the menu bar icon as `hh:mm`.
-2. **Minimum Battery Threshold:** Turn off sleep prevention if the battery reaches this percentage while unplugged with the lid closed.
-3. **Turn off when the lid opens:** Off by default. Turn it on if opening the lid should restore normal sleep immediately.
-4. **Restart the timer when the lid closes:** On by default. Closing the lid starts the wake timeout over. A 15-minute timer with 2 minutes left becomes 15 minutes again.
+1. **Sleep after closing the lid:** How long the Mac stays awake after the lid closes (`10m`, `15m`, `30m`, `60m`, custom minutes, or `Never`). The time does not count, and is not shown, while the lid is open. Opening the lid cancels it. Closing the lid starts the full time again. When the time ends, the Mac sleeps. Wake mode stays on, so the next open keeps the Mac awake.
+2. **Minimum Battery Threshold:** Turn off wake mode if the battery reaches this percentage while unplugged with the lid closed.
 
 Settings are saved locally to `~/.mac-power-switcher/settings.json`.
 

@@ -9,15 +9,8 @@ struct MacPowerSwitcherApp: App {
         MenuBarExtra {
             MenuContent(manager: manager)
         } label: {
-            HStack(spacing: 4) {
-                Image(systemName: manager.isEnabled ? "bolt.fill" : "bolt.slash")
-                    .symbolRenderingMode(.hierarchical)
-                if let trayTimeText = manager.trayTimeText {
-                    Text(trayTimeText)
-                        .font(.system(size: 13).monospacedDigit())
-                        .fixedSize()
-                }
-            }
+            Image(systemName: manager.isEnabled ? "bolt.fill" : "bolt.slash")
+                .symbolRenderingMode(.hierarchical)
         }
 
         Window("Settings", id: "settings") {
@@ -25,7 +18,7 @@ struct MacPowerSwitcherApp: App {
         }
         .windowResizability(.contentSize)
         .defaultPosition(.center)
-        .defaultSize(width: 440, height: 680)
+        .defaultSize(width: 440, height: 520)
 
         Window("About Mac Power Switcher", id: "about") {
             AboutView(settings: manager.settingsStore.settings)
@@ -41,6 +34,11 @@ private struct MenuContent: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
+        if manager.isEnabled {
+            Text(manager.menuStatus)
+            Divider()
+        }
+
         Button(manager.isEnabled ? "Turn off wake up" : "Turn on wake up") {
             manager.setEnabled(!manager.isEnabled)
         }
@@ -77,21 +75,21 @@ private struct AboutView: View {
                 }
             }
 
-            Text("This menu bar app keeps your Mac awake when you close the lid, as long as it is plugged into a charger.")
+            Text("Turn wake mode on and the Mac stays awake while the lid is open. After you close the lid, it sleeps when the time you set runs out.")
                 .fixedSize(horizontal: false, vertical: true)
 
             VStack(alignment: .leading, spacing: 8) {
                 bullet(
                     "Turn on wake up / Turn off wake up",
-                    "Turns sleep prevention on or off. It stays on until you turn it off, unless a wake timeout or the lid option below says otherwise."
+                    "Turns wake mode on or off. While it is on and the lid is open, the Mac stays awake. It does not turn itself off during use."
                 )
                 bullet(
-                    "Wake timeout",
+                    "Sleep after closing the lid",
                     wakeTimeoutDetail
                 )
                 bullet(
-                    "Time in the menu bar",
-                    "While the lid is open and a wake timeout is set, the time left appears to the right of the lightning bolt as hh:mm, such as 00:14 or 01:05."
+                    "Menu bar",
+                    "The menu bar shows only the lightning bolt. The sleep time does not count down there, and it is not shown while you are using the Mac."
                 )
                 bullet(
                     "Power source",
@@ -99,23 +97,19 @@ private struct AboutView: View {
                 )
                 bullet(
                     "Low battery",
-                    "If the lid is closed, the battery is at \(settings.minPowerPercent)% or below, and it is not charging, sleep prevention turns off by itself so the Mac can sleep. That path does not ask for Touch ID."
+                    "If the lid is closed, the battery is at \(settings.minPowerPercent)% or below, and it is not charging, wake mode turns off by itself so the Mac can sleep. That path does not ask for Touch ID."
                 )
                 bullet(
-                    "Lid opens",
-                    settings.disableOnLidOpen
-                        ? "When you open the lid again, sleep prevention turns off by itself so the Mac returns to normal."
-                        : "Sleep prevention stays on after you open the lid. Turn it off yourself with Turn off wake up, or wait for the wake timeout."
+                    "Opening the lid",
+                    "Opening the lid cancels the sleep time and keeps the Mac awake. Wake mode stays on."
                 )
                 bullet(
-                    "Lid closes",
-                    settings.extendOnLidClose
-                        ? "Closing the lid starts the wake timeout over. A 15-minute timer with 2 minutes left becomes 15 minutes again."
-                        : "Closing the lid does not change the wake timeout. The countdown keeps running."
+                    "Closing the lid",
+                    "Closing the lid starts the full sleep time. A later close starts it over from the beginning."
                 )
                 bullet(
                     "Settings",
-                    "Open Settings from the menu to change the wake timeout, minimum battery, and lid behavior. Values are stored in ~/.mac-power-switcher/settings.json. If that file is missing, the app uses the defaults (30-minute timeout, 10% battery, stay on when the lid opens, restart the timer when the lid closes)."
+                    "Open Settings from the menu to change how long the Mac stays awake after the lid closes, and the minimum battery. Values are stored in ~/.mac-power-switcher/settings.json. If that file is missing, the app uses the defaults (sleep 30 minutes after the lid closes, 10% battery)."
                 )
                 bullet(
                     "Authentication",
@@ -133,17 +127,17 @@ private struct AboutView: View {
 
     private var versionText: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        return "Version \(version ?? "1.1.0")"
+        return "Version \(version ?? "1.2.0")"
     }
 
     private var wakeTimeoutDetail: String {
         guard let minutes = settings.autoDisableMinutes else {
-            return "Sleep prevention stays on until you turn it off, or until the battery reaches the minimum level."
+            return "With the lid closed, the Mac stays awake until you turn wake mode off, or until the battery reaches the minimum level."
         }
         if minutes == 1 {
-            return "Sleep prevention turns off by itself after 1 minute."
+            return "After the lid closes, the Mac sleeps 1 minute later. Opening the lid cancels that and keeps the Mac awake."
         }
-        return "Sleep prevention turns off by itself after \(minutes) minutes."
+        return "After the lid closes, the Mac sleeps \(minutes) minutes later. Opening the lid cancels that and keeps the Mac awake."
     }
 
     private func bullet(_ title: String, _ detail: String) -> some View {

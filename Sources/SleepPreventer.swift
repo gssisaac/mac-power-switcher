@@ -2,55 +2,64 @@ import AppKit
 import Foundation
 import notify
 
+/// Wake mode stays on while the lid is open. The chosen duration does not
+/// count, and is not shown, until the lid closes. Opening the lid cancels
+/// it. When the time runs out with the lid still closed, the Mac sleeps and
+/// wake mode stays on, so the next time the lid opens the timer is reset.
 @MainActor
 final class SleepPreventer: ObservableObject {
     let settingsStore = AppSettingsStore()
 
     @Published private(set) var isEnabled = false
     @Published private(set) var isBusy = false
-    @Published private(set) var autoDisableReason: AutoDisableReason?
-    /// `hh:mm` left until the wake timeout, shown beside the tray icon while the lid is open.
-    @Published private(set) var trayTimeText: String?
+    @Published private(set) var lidClosed = false
 
     private var watchTimer: Timer?
     private var autoOffTimer: Timer?
-    private var displayTimer: Timer?
     private var lidNotifyToken: Int32 = 0
-    private var enabledAt: Date?
-    private var previousLidClosed: Bool = false
+    private var wakeObserver: NSObjectProtocol?
+    private var powerActivity: NSObjectProtocol?
+    private var lidClosedAt: Date?
+    private var previousLidClosed = false
     private var hasConfirmedAuth = false
 
     var minPowerPercent: Int { settingsStore.settings.minPowerPercent }
 
-    enum AutoDisableReason {
-        case lowBattery
-        case timeout
-        case lidOpened
+    var menuStatus: String {
+        guard isEnabled else { return "Off" }
+        if !lidClosed {
+            return "On. The Mac stays awake while the lid is open."
+        }
+        if settingsStore.settings.autoDisableMinutes == nil {
+            return "On. The lid is closed. The Mac stays awake."
+        }
+        return "On. The lid is closed. The Mac sleeps when the time is up."
     }
 
     init() {
-        refresh()
+        let pmsetOn = Self.readSleepDisabled()
+        let state = settingsStore.loadWakeState()
+        if let mode = state.modeEnabled {
+            isEnabled = mode
+            lidClosedAt = state.lidClosedAt
+            if !mode && pmsetOn {
+                Task { try? PrivilegedHelper.setSleepDisabled(false) }
+            }
+        } else {
+            isEnabled = pmsetOn
+            if pmsetOn {
+                persistWakeState()
+            }
+        }
         if isEnabled {
-            enabledAt = settingsStore.loadWakeState().enabledAt ?? Date()
-            persistWakeState()
             startWatching()
         }
     }
 
-    func refresh() {
-        isEnabled = Self.readSleepDisabled()
-    }
-
     func settingsDidChange() {
         objectWillChange.send()
-        guard isEnabled else {
-            updateTrayTime()
-            return
-        }
-        scheduleAutoOffTimer()
-        handleLidChange()
-        autoDisableIfTimedOut()
-        updateTrayTime()
+        guard isEnabled else { return }
+        reconcilePowerState()
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -58,7 +67,6 @@ final class SleepPreventer: ObservableObject {
         isBusy = true
 
         Task {
-            defer { isBusy = false }
             do {
                 try PrivilegedHelper.ensureInstalled()
                 if !hasConfirmedAuth {
@@ -67,118 +75,169 @@ final class SleepPreventer: ObservableObject {
                 }
                 try PrivilegedHelper.setSleepDisabled(enabled)
                 isEnabled = enabled
-                autoDisableReason = nil
-                if enabled {
-                    enabledAt = Date()
-                    persistWakeState()
-                    startWatching()
-                } else {
-                    clearWakeState()
-                    stopWatching()
-                }
+                lidClosedAt = nil
+                persistWakeState()
             } catch {
-                refresh()
+                isEnabled = Self.readSleepDisabled()
                 NSSound.beep()
+            }
+            isBusy = false
+            if isEnabled {
+                startWatching()
+            } else {
+                stopWatching()
             }
         }
     }
 
-    /// Remaining time as `hh:mm`, rounded up to the next minute.
-    static func formatRemaining(_ remaining: TimeInterval) -> String? {
-        guard remaining > 0 else { return nil }
-        let seconds = Int(remaining.rounded(.up))
-        guard seconds > 0 else { return nil }
-        let minutesRoundedUp = (seconds + 59) / 60
-        let hours = minutesRoundedUp / 60
-        let minutes = minutesRoundedUp % 60
-        return String(format: "%02d:%02d", hours, minutes)
-    }
+    private func reconcilePowerState() {
+        let closed = PowerStatus.isLidClosed()
+        if lidClosed != closed {
+            lidClosed = closed
+        }
 
-    private func autoDisableIfNeeded() {
+        // A toggle or sleep request is in flight. Leave the previous lid
+        // sample in place so the transition is still visible when it finishes.
         guard isEnabled, !isBusy else { return }
-        guard PowerStatus.isLidClosed() else { return }
-        guard let battery = PowerStatus.battery() else { return }
-        guard battery.percent <= minPowerPercent, !battery.isCharging else { return }
-        performAutoDisable(reason: .lowBattery)
-    }
 
-    private func handleLidChange() {
-        let lidClosed = PowerStatus.isLidClosed()
         let wasClosed = previousLidClosed
-        previousLidClosed = lidClosed
+        previousLidClosed = closed
 
-        if wasClosed && !lidClosed && settingsStore.settings.disableOnLidOpen {
-            performAutoDisable(reason: .lidOpened)
+        if !closed {
+            if wasClosed || lidClosedAt != nil {
+                setLidClosedAt(nil)
+                autoOffTimer?.invalidate()
+                autoOffTimer = nil
+            }
+            beginPowerActivity()
+            ensureSleepPrevention(enabled: true)
             return
         }
 
-        if !wasClosed && lidClosed {
-            restartWakeTimerIfExtending()
+        if !wasClosed || lidClosedAt == nil {
+            setLidClosedAt(Date())
         }
 
-        autoDisableIfNeeded()
-        updateTrayTime()
-    }
+        if shouldForceOffForLowBattery() {
+            disableForLowBattery()
+            return
+        }
 
-    private func restartWakeTimerIfExtending() {
-        guard isEnabled, !isBusy else { return }
-        guard settingsStore.settings.extendOnLidClose else { return }
-        guard settingsStore.settings.autoDisableMinutes != nil else { return }
-        enabledAt = Date()
-        persistWakeState()
+        if closedLidDeadlinePassed() {
+            sleepForClosedLidTimeout()
+            return
+        }
+
+        beginPowerActivity()
+        ensureSleepPrevention(enabled: true)
         scheduleAutoOffTimer()
     }
 
-    private func autoDisableIfTimedOut() {
-        guard isEnabled, !isBusy else { return }
-        guard let minutes = settingsStore.settings.autoDisableMinutes, let enabledAt else { return }
-        let deadline = enabledAt.addingTimeInterval(TimeInterval(minutes * 60))
-        guard Date() >= deadline else { return }
-        performAutoDisable(reason: .timeout)
+    private func shouldForceOffForLowBattery() -> Bool {
+        guard lidClosed else { return false }
+        guard let battery = PowerStatus.battery() else { return false }
+        return battery.percent <= minPowerPercent && !battery.isCharging
     }
 
-    private func performAutoDisable(reason: AutoDisableReason) {
+    private func closedLidDeadline() -> Date? {
+        guard let minutes = settingsStore.settings.autoDisableMinutes, let lidClosedAt else {
+            return nil
+        }
+        return lidClosedAt.addingTimeInterval(TimeInterval(minutes * 60))
+    }
+
+    private func closedLidDeadlinePassed(now: Date = Date()) -> Bool {
+        guard let deadline = closedLidDeadline() else { return false }
+        return now >= deadline
+    }
+
+    private func sleepForClosedLidTimeout() {
+        guard isEnabled else { return }
+        guard PowerStatus.isLidClosed() else { return }
+        guard closedLidDeadlinePassed() else { return }
+        guard !isBusy else {
+            scheduleSleepRetry()
+            return
+        }
+
+        isBusy = true
+        endPowerActivity()
+        Task {
+            var resumeAwake = false
+            do {
+                try PrivilegedHelper.setSleepDisabled(false)
+                try await Task.sleep(nanoseconds: 500_000_000)
+                if PowerStatus.isLidClosed(), closedLidDeadlinePassed() {
+                    PowerStatus.sleepNow()
+                } else {
+                    beginPowerActivity()
+                    try PrivilegedHelper.setSleepDisabled(true)
+                    resumeAwake = true
+                }
+            } catch {
+                beginPowerActivity()
+                resumeAwake = true
+            }
+            isBusy = false
+            if resumeAwake {
+                reconcilePowerState()
+            }
+        }
+    }
+
+    private func disableForLowBattery() {
         guard isEnabled, !isBusy else { return }
         isBusy = true
+        endPowerActivity()
         Task {
             defer { isBusy = false }
             do {
                 try PrivilegedHelper.setSleepDisabled(false)
                 isEnabled = false
-                autoDisableReason = reason
-                clearWakeState()
+                lidClosedAt = nil
+                persistWakeState()
                 stopWatching()
                 if PowerStatus.isLidClosed(), !PowerStatus.hasExternalDisplay() {
                     PowerStatus.sleepNow()
                 }
             } catch {
-                refresh()
+                beginPowerActivity()
+            }
+        }
+    }
+
+    private func ensureSleepPrevention(enabled: Bool) {
+        guard !isBusy else { return }
+        guard Self.readSleepDisabled() != enabled else { return }
+        isBusy = true
+        Task {
+            defer { isBusy = false }
+            do {
+                try PrivilegedHelper.setSleepDisabled(enabled)
+            } catch {
+                // The next lid or wake pass tries again.
             }
         }
     }
 
     private func startWatching() {
         stopWatching()
-        previousLidClosed = PowerStatus.isLidClosed()
-        autoDisableIfNeeded()
-        autoDisableIfTimedOut()
-        scheduleAutoOffTimer()
-        updateTrayTime()
+        beginPowerActivity()
+        let closed = PowerStatus.isLidClosed()
+        previousLidClosed = closed
+        lidClosed = closed
+        installMonitors()
+        reconcilePowerState()
+    }
 
-        watchTimer = Timer.scheduledTimer(withTimeInterval: 20, repeats: true) { [weak self] _ in
+    private func installMonitors() {
+        let watch = Timer(timeInterval: 20, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.handleLidChange()
-                self?.autoDisableIfTimedOut()
+                self?.reconcilePowerState()
             }
         }
-
-        let display = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.updateTrayTime()
-            }
-        }
-        RunLoop.main.add(display, forMode: .common)
-        displayTimer = display
+        RunLoop.main.add(watch, forMode: .common)
+        watchTimer = watch
 
         notify_register_dispatch(
             "com.apple.iokit.powermanagement.clamshellstate",
@@ -186,7 +245,17 @@ final class SleepPreventer: ObservableObject {
             DispatchQueue.main
         ) { [weak self] _ in
             Task { @MainActor in
-                self?.handleLidChange()
+                self?.reconcilePowerState()
+            }
+        }
+
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.reconcilePowerState()
             }
         }
     }
@@ -196,53 +265,68 @@ final class SleepPreventer: ObservableObject {
         watchTimer = nil
         autoOffTimer?.invalidate()
         autoOffTimer = nil
-        displayTimer?.invalidate()
-        displayTimer = nil
-        trayTimeText = nil
         if lidNotifyToken != 0 {
             notify_cancel(lidNotifyToken)
             lidNotifyToken = 0
         }
-    }
-
-    private func updateTrayTime() {
-        let next = currentTrayTimeText()
-        if trayTimeText != next {
-            trayTimeText = next
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
         }
-    }
-
-    private func currentTrayTimeText() -> String? {
-        guard isEnabled, !PowerStatus.isLidClosed() else { return nil }
-        guard let minutes = settingsStore.settings.autoDisableMinutes, let enabledAt else { return nil }
-        let remaining = enabledAt.addingTimeInterval(TimeInterval(minutes * 60)).timeIntervalSinceNow
-        return Self.formatRemaining(remaining)
+        endPowerActivity()
     }
 
     private func scheduleAutoOffTimer() {
         autoOffTimer?.invalidate()
         autoOffTimer = nil
-        guard isEnabled else { return }
-        guard let minutes = settingsStore.settings.autoDisableMinutes, let enabledAt else { return }
-        let remaining = enabledAt.addingTimeInterval(TimeInterval(minutes * 60)).timeIntervalSinceNow
+        guard isEnabled, lidClosed, let deadline = closedLidDeadline() else { return }
+        let remaining = deadline.timeIntervalSinceNow
         if remaining <= 0 {
-            autoDisableIfTimedOut()
+            sleepForClosedLidTimeout()
             return
         }
-        autoOffTimer = Timer.scheduledTimer(withTimeInterval: remaining, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: remaining, repeats: false) { [weak self] _ in
             Task { @MainActor in
-                self?.autoDisableIfTimedOut()
+                self?.sleepForClosedLidTimeout()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        autoOffTimer = timer
+    }
+
+    private func scheduleSleepRetry() {
+        autoOffTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                self?.sleepForClosedLidTimeout()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        autoOffTimer = timer
+    }
+
+    private func beginPowerActivity() {
+        guard powerActivity == nil else { return }
+        powerActivity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiatedAllowingIdleSystemSleep],
+            reason: "Mac Power Switcher is keeping this Mac awake"
+        )
+    }
+
+    private func endPowerActivity() {
+        guard let powerActivity else { return }
+        ProcessInfo.processInfo.endActivity(powerActivity)
+        self.powerActivity = nil
+    }
+
+    private func setLidClosedAt(_ date: Date?) {
+        guard lidClosedAt != date else { return }
+        lidClosedAt = date
+        persistWakeState()
     }
 
     private func persistWakeState() {
-        settingsStore.saveWakeState(WakeState(enabledAt: enabledAt))
-    }
-
-    private func clearWakeState() {
-        enabledAt = nil
-        settingsStore.saveWakeState(WakeState(enabledAt: nil))
+        settingsStore.saveWakeState(WakeState(modeEnabled: isEnabled, lidClosedAt: lidClosedAt))
     }
 
     private static func readSleepDisabled() -> Bool {
